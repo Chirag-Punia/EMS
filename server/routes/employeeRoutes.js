@@ -1,6 +1,23 @@
 const express = require('express');
 const Employee = require('../models/Employee');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'uploads/');
+    },
+    filename: (req, file, cb) => {
+        cb(null, `${Date.now()}_${file.originalname}`);
+    },
+});
+const upload = multer({ storage });
+
+
+router.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+
 
 router.get('/', async (req, res) => {
     try {
@@ -11,8 +28,26 @@ router.get('/', async (req, res) => {
     }
 });
 
-router.post('/', async (req, res) => {
-    const employee = new Employee(req.body);
+
+async function checkDuplicateEntry(req, res, next) {
+    const { uniqueId, email } = req.body;
+    const existingEmployee = await Employee.findOne({ $or: [{ uniqueId }, { email }] });
+
+    if (existingEmployee) {
+        return res.status(409).json({
+            message: "Duplicate entry: Employee with the same Unique ID or Email already exists.",
+        });
+    }
+    next();
+}
+
+
+router.post('/', upload.single('image'), checkDuplicateEntry, async (req, res) => {
+    const employeeData = req.body;
+    if (req.file) {
+        employeeData.image = `http://localhost:5002/uploads/${req.file.filename}`;
+    }
+    const employee = new Employee(employeeData);
     try {
         const savedEmployee = await employee.save();
         res.status(201).json(savedEmployee);
@@ -22,25 +57,35 @@ router.post('/', async (req, res) => {
 });
 
 
-router.put('/', async (req, res) => {
-    console.log("PUT request received");
-    console.log("Body:", req.body);
+router.put('/:id', upload.single('image'), async (req, res) => {
+    const { id } = req.params;
+    const updateData = req.body;
 
-    const { _id, ...updateData } = req.body;
 
-    if (!_id) {
-        return res.status(400).json({ message: 'Employee ID is required' });
+    const duplicate = await Employee.findOne({
+        $and: [
+            { _id: { $ne: id } },
+            { $or: [{ uniqueId: updateData.uniqueId }, { email: updateData.email }] },
+        ],
+    });
+
+    if (duplicate) {
+        return res.status(409).json({
+            message: "Duplicate entry: Employee with the same Unique ID or Email already exists.",
+        });
+    }
+
+    if (req.file) {
+        updateData.image = `http://localhost:5002/uploads/${req.file.filename}`;
     }
 
     try {
-        const updatedEmployee = await Employee.findByIdAndUpdate(_id, updateData, { new: true });
+        const updatedEmployee = await Employee.findByIdAndUpdate(id, updateData, { new: true });
         if (!updatedEmployee) {
             return res.status(404).json({ message: 'Employee not found' });
         }
-        console.log("Updated employee:", updatedEmployee);
         res.json(updatedEmployee);
     } catch (err) {
-        console.error("Error updating employee:", err);
         res.status(400).json({ message: err.message });
     }
 });
